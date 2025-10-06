@@ -1,0 +1,118 @@
+# app.py
+import streamlit as st
+import asyncio
+import threading
+import time
+from agents import IngestionAgent, RetrievalAgent, LLMResponseAgent, CoordinatorAgent, make_message
+from vector_store import VectorStore
+from pathlib import Path
+import os
+import tempfile
+import uuid
+
+# create queues for MCP messaging
+ingest_in = asyncio.Queue()
+retrieval_in = asyncio.Queue()
+llm_in = asyncio.Queue()
+# UI outbox - LLMResponseAgent sends final messages to this queue
+ui_out = asyncio.Queue()
+
+# Vector store
+store = VectorStore()
+
+# Create agent instances
+ingestion_agent = IngestionAgent(inbox=ingest_in, outbox=retrieval_in, store=store)
+retrieval_agent = RetrievalAgent(inbox=retrieval_in, outbox=llm_in, store=store)
+llm_agent = LLMResponseAgent(inbox=llm_in, outbox=ui_out)
+coordinator = CoordinatorAgent(ingest_in, retrieval_in, llm_in, ui_out)
+
+# Run asyncio loop in background thread for agents
+def start_event_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+new_loop = asyncio.new_event_loop()
+t = threading.Thread(target=start_event_loop, args=(new_loop,), daemon=True)
+t.start()
+
+# Schedule agent coroutines
+async def schedule_agents():
+    await asyncio.gather(
+        ingestion_agent.run(),
+        retrieval_agent.run(),
+        llm_agent.run(),
+    )
+
+asyncio.run_coroutine_threadsafe(schedule_agents(), new_loop)
+
+# Helper to put coroutine work into the event loop
+def run_coroutine(coro):
+    return asyncio.run_coroutine_threadsafe(coro, new_loop)
+
+# Streamlit UI
+st.set_page_config(page_title="Agentic RAG Chatbot (MCP)", layout="wide")
+st.title("Agentic RAG Chatbot — MCP demo")
+
+# Upload files
+st.sidebar.header("1) Upload documents (PDF, PPTX, DOCX, CSV, TXT)")
+uploaded = st.sidebar.file_uploader("Upload multiple files", accept_multiple_files=True)
+if st.sidebar.button("Ingest files"):
+    if not uploaded:
+        st.sidebar.warning("Please upload at least one file.")
+    else:
+        saved_paths = []
+        for file in uploaded:
+            ext = Path(file.name).suffix
+            save_path = f"assets/upload_{uuid.uuid4().hex[:8]}_{file.name}"
+            with open(save_path, "wb") as f:
+                f.write(file.getbuffer())
+            saved_paths.append(save_path)
+        run_coroutine(coordinator.ingest_files(saved_paths))
+        st.sidebar.success(f"Queued {len(saved_paths)} files for ingestion.")
+
+# Chat interaction
+st.sidebar.header("2) Ask a question")
+query = st.sidebar.text_area("Type your question")
+if st.sidebar.button("Ask"):
+    if not query.strip():
+        st.sidebar.warning("Please enter a question.")
+    else:
+        # dispatch retrieve
+        run_coroutine(coordinator.handle_query(query))
+        st.sidebar.info("Query sent. Waiting for answer...")
+
+# Display answers (polling the ui_out queue)
+st.header("Responses")
+placeholder = st.empty()
+
+def poll_ui_out():
+    # Non-blocking retrieval
+    try:
+        fut = asyncio.run_coroutine_threadsafe(ui_out.get(), new_loop)
+        msg = fut.result(timeout=0.2)
+        return msg
+    except Exception:
+        return None
+
+# Simple loop to fetch any messages and display them
+msgs = []
+# Try to fetch a few messages
+for _ in range(5):
+    m = poll_ui_out()
+    if m:
+        msgs.append(m)
+    else:
+        break
+
+if msgs:
+    for m in msgs:
+        if m['type'] == 'FINAL_ANSWER':
+            st.subheader("Answer")
+            st.write(m['payload']['answer'])
+            st.subheader("Sources / Context")
+            cols = st.columns(1)
+            for c in m['payload']['sources']:
+                st.markdown(f"- **{c.get('source','unknown')}** — score: `{c.get('score',0):.4f}`")
+                st.markdown(f"```{c.get('text')[:1000]}```")
+else:
+    st.info("No responses yet. Ingest files and ask a question. Answers will appear here when ready.")

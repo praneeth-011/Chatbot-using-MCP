@@ -137,8 +137,3 @@ class CoordinatorAgent:
             "payload": {"query": query}
         })
 
-    async def handle_retrieved(self, query, top_chunks):
-        await self.llm_in.put({
-            "type": "LLM_QUERY",
-            "payload": {"query": query, "top_chunks": top_chunks}
-        })

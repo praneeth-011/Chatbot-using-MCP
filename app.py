@@ -5,31 +5,27 @@ import uuid
 from pathlib import Path
 from dotenv import load_dotenv
 import os
-import time
 
-# Load local .env
+# Load .env
 load_dotenv()
-
-# Dual-source API key (Streamlit Cloud or local)
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
     st.warning("⚠️ OPENAI_API_KEY not set. LLM queries will not work.")
 
-# ------------------- Import MCP agents -------------------
 from agents import IngestionAgent, RetrievalAgent, LLMResponseAgent, CoordinatorAgent
-from vector_store import VectorStore
 
-# ------------------- Queues -------------------
+# ---------------- Queues ----------------
 ingest_in, retrieval_in, llm_in, ui_out = asyncio.Queue(), asyncio.Queue(), asyncio.Queue(), asyncio.Queue()
-store = VectorStore()
+
+store = {}  # Replace with your actual VectorStore if needed
 
 ingestion_agent = IngestionAgent(ingest_in, retrieval_in, store)
 retrieval_agent = RetrievalAgent(retrieval_in, llm_in, store)
 llm_agent = LLMResponseAgent(llm_in, ui_out)
 coordinator = CoordinatorAgent(ingest_in, retrieval_in, llm_in, ui_out)
 
-# ------------------- Async event loop -------------------
+# ---------------- Async event loop ----------------
 def start_event_loop(loop):
     asyncio.set_event_loop(loop)
     loop.run_forever()
@@ -49,11 +45,11 @@ asyncio.run_coroutine_threadsafe(schedule_agents(), loop)
 def run_async(coro):
     return asyncio.run_coroutine_threadsafe(coro, loop)
 
-# ------------------- Streamlit UI -------------------
-st.set_page_config(page_title="Agentic RAG Chatbot (MCP)", layout="wide")
+# ---------------- Streamlit UI ----------------
+st.set_page_config(page_title="Agentic RAG Chatbot", layout="wide")
 st.title("🧠 Agentic RAG Chatbot — MCP Demo")
 
-# Sidebar: Upload documents
+# Upload documents
 st.sidebar.header("1️⃣ Upload Documents")
 uploaded = st.sidebar.file_uploader("Upload files", accept_multiple_files=True)
 
@@ -71,7 +67,7 @@ if st.sidebar.button("Ingest Files"):
         run_async(coordinator.ingest_files(paths))
         st.sidebar.success("Files queued for ingestion.")
 
-# Sidebar: Ask a question
+# Ask a question
 st.sidebar.header("2️⃣ Ask a Question")
 query = st.sidebar.text_input("Enter your question")
 
@@ -82,30 +78,11 @@ if st.sidebar.button("Ask"):
     else:
         st.sidebar.warning("Enter a question first.")
 
-# Main panel: show chatbot responses
-st.header("💬 Chatbot Responses")
-msgs = []
-
-try:
-    while True:
-        fut = asyncio.run_coroutine_threadsafe(ui_out.get(), loop)
-        msg = fut.result(timeout=0.2)
-        msgs.append(msg)
-        ui_out.task_done()
-except Exception:
-    pass
-
-for m in msgs:
-    if m['type'] == 'FINAL_ANSWER':
-        st.subheader("Answer")
-        st.write(m['payload']['answer'])
-        st.subheader("Sources")
-        for s in m['payload']['sources'][:3]:
-            st.markdown(f"- {s.get('source','unknown')} (score={s.get('score',0):.3f})")
-            
+# Display responses
+import time
 msgs = []
 start_time = time.time()
-timeout = 5  # seconds to wait for LLM response
+timeout = 5  # seconds
 
 while time.time() - start_time < timeout:
     try:
@@ -115,3 +92,11 @@ while time.time() - start_time < timeout:
         ui_out.task_done()
     except Exception:
         time.sleep(0.1)
+
+for m in msgs:
+    if m['type'] == 'FINAL_ANSWER':
+        st.subheader("Answer")
+        st.write(m['payload']['answer'])
+        st.subheader("Sources")
+        for s in m['payload']['sources'][:3]:
+            st.markdown(f"- {s.get('source','unknown')} (score={s.get('score',0):.3f})")

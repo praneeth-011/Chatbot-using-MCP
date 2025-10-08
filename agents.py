@@ -1,6 +1,7 @@
 import os
 import asyncio
 from typing import List, Dict
+from openai import OpenAI
 from dotenv import load_dotenv
 
 # Detect Streamlit environment
@@ -51,46 +52,37 @@ class LLMResponseAgent:
         self.outbox = outbox
 
     def _build_prompt(self, query: str, top_chunks: List[Dict]):
-        """
-        Combine context chunks and user query into a structured prompt.
-        """
         context_texts = []
         for i, c in enumerate(top_chunks):
-            context_texts.append(f"Source {i+1} ({c.get('source', 'unknown')}):\n{c.get('text', '')}\n")
+            context_texts.append(f"Source {i+1} ({c['source']}):\n{c['text']}\n")
         context = "\n\n".join(context_texts)
-        
-        prompt = f"""
-You are a helpful assistant. Use only the information in the provided sources to answer the user query. 
-If the answer is not present, say 'I don't know from the documents provided.'
+
+        return f"""
+You are a helpful AI assistant. Use only the given sources to answer the question.
+If the answer is not in the sources, say "I don't know from the provided documents."
 
 Context:
 {context}
 
-Question: {query}
+User question:
+{query}
+
 Answer:
 """
-        return prompt
 
     async def run(self):
-        """
-        Continuously listen for incoming messages and respond using OpenAI LLM.
-        """
         while True:
-            msg = await self.inbox.get()
+            task = await self.inbox.get()
             try:
-                if msg["type"] == "QUERY":
-                    query = msg["payload"]["query"]
-                    top_chunks = msg["payload"].get("top_chunks", [])
+                if task["type"] == "LLM_QUERY":
+                    query = task["payload"]["query"]
+                    top_chunks = task["payload"]["top_chunks"]
                     prompt = self._build_prompt(query, top_chunks)
 
-                    # Call OpenAI LLM asynchronously
-                    response = await client.chat.completions.acreate(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": "You are a document-based Q&A assistant."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        temperature=0.3,
+                    # ✅ Use new OpenAI SDK call
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",  # change model if needed
+                        messages=[{"role": "user", "content": prompt}],
                     )
 
                     answer = response.choices[0].message.content.strip()
@@ -99,17 +91,13 @@ Answer:
                         "type": "FINAL_ANSWER",
                         "payload": {
                             "answer": answer,
-                            "sources": top_chunks[:3]
+                            "sources": top_chunks,
                         }
                     })
-
             except Exception as e:
                 await self.outbox.put({
-                    "type": "FINAL_ANSWER",
-                    "payload": {
-                        "answer": f"⚠️ Error calling LLM: {str(e)}",
-                        "sources": []
-                    }
+                    "type": "ERROR",
+                    "payload": {"error": str(e)},
                 })
             finally:
                 self.inbox.task_done()

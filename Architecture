@@ -1,1 +1,47 @@
-
++----------------------+
+|      Streamlit UI    |
+|----------------------|
+| - Upload documents   |
+| - Enter query        |
+| - Display answer & sources
++-----------+----------+
+            |
+            v
++----------------------+
+|   Coordinator Agent  |
+|----------------------|
+| - Receives tasks     |
+| - Sends to ingestion |
+| - Sends queries to retrieval |
+| - Sends results to LLM |
++-----------+----------+
+            |
+            v
++------------------------------+
+|           Agents Layer       |
+|------------------------------|
+| 1. IngestionAgent            |
+|    - Parses PDFs, DOCX, CSV, PPTX, TXT
+|    - Chunks & cleans text
+|    - Stores embeddings in FAISS
+|                              |
+| 2. RetrievalAgent            |
+|    - Receives user query
+|    - Computes query embedding
+|    - Searches vector store
+|    - Returns top-k relevant chunks
+|                              |
+| 3. LLMResponseAgent          |
+|    - Builds prompt with top-k context
+|    - Calls OpenAI LLM via API
+|    - Sends final answer to UI
++------------------------------+
+            |
+            v
++------------------------------+
+|      Storage Layer           |
+|------------------------------|
+| - VectorStore (FAISS)        |
+| - Metadata store (JSON)      |
+| - Sentence Transformers for embeddings
++------------------------------+

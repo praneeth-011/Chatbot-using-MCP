@@ -8,9 +8,17 @@ from vector_store import VectorStore
 import os
 import json
 import openai
+from dotenv import load_dotenv
+import os
 
+load_dotenv()
+OPENAI_API_KEY = os.getenv("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")
+
+if not OPENAI_API_KEY:
+    print("⚠️ OPENAI_API_KEY not set. LLM queries will not work.")
+    
 # Ensure OPENAI_API_KEY is set in environment
-OPENAI_API_KEY = os.environ.get("sk-proj-Edm1FLOnxfPgpb5eb2y6bpR4RE4iSwM_ShUj_hIiTpytM2M3vQGd3dqKARd926FmazO-OSeWLQT3BlbkFJ8XuhRXPszJkydQ1i5WcbJI-UyXzXMfFGXx5rxhqtCbbGrPmRorZqxBgn1JP3fi4_jc2PsIVxsAY")
+OPENAI_API_KEY = os.environ.get("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")
 openai.api_key = OPENAI_API_KEY
 
 # MCP message structure for typing:

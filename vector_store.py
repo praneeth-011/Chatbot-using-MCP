@@ -1,4 +1,3 @@
-# vector_store.py
 import faiss
 import numpy as np
 import os
@@ -15,13 +14,17 @@ class VectorStore:
         self.meta_path = meta_path
         self.dim = dim
         self.model = SentenceTransformer(EMBED_MODEL)
-        if os.path.exists(index_path) and os.path.exists(meta_path):
-            self.index = faiss.read_index(index_path)
-            with open(meta_path, 'r', encoding='utf-8') as f:
-                self.meta = json.load(f)
-        else:
+
+        try:
+            if os.path.exists(index_path) and os.path.exists(meta_path):
+                self.index = faiss.read_index(index_path)
+                with open(meta_path, 'r', encoding='utf-8') as f:
+                    self.meta = json.load(f)
+            else:
+                raise FileNotFoundError
+        except Exception:
             self.index = faiss.IndexFlatL2(self.dim)
-            self.meta = []  # list of dicts aligned with index
+            self.meta = []
             self._save()
 
     def _save(self):
@@ -30,12 +33,11 @@ class VectorStore:
             json.dump(self.meta, f, ensure_ascii=False, indent=2)
 
     def add_texts(self, texts: List[str], metadatas: List[Dict[str, Any]]):
+        assert len(texts) == len(metadatas), "Texts and metadata length mismatch!"
         emb = self.model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
         emb = np.array(emb).astype('float32')
         self.index.add(emb)
-        # append metadata
-        for m in metadatas:
-            self.meta.append(m)
+        self.meta.extend(metadatas)
         self._save()
 
     def query(self, q: str, top_k: int = 5):
@@ -43,12 +45,11 @@ class VectorStore:
         D, I = self.index.search(q_emb, top_k)
         results = []
         for idx, dist in zip(I[0], D[0]):
-            if idx < 0 or idx >= len(self.meta):
-                continue
-            m = self.meta[idx].copy()
-            m['score'] = float(dist)
-            results.append(m)
-        return results
+            if 0 <= idx < len(self.meta):
+                m = self.meta[idx].copy()
+                m['score'] = float(dist)
+                results.append(m)
+        return sorted(results, key=lambda x: x['score'])
 
     def clear(self):
         self.index = faiss.IndexFlatL2(self.dim)

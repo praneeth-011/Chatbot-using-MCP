@@ -27,13 +27,15 @@ except ImportError:
 
 class SafeLLMAgent:
     def __init__(self):
-        self.client = OpenAI(api_key=OPENAI_API_KEY) if (OPENAI_API_KEY and OpenAI) else None
+        self.client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
     async def get_response(self, prompt: str):
         if not self.client:
             return {"answer": "⚠️ LLM not available. Set OPENAI_API_KEY.", "sources": []}
         try:
-            resp = await self.client.chat.completions.acreate(
+            # synchronous call inside async
+            from openai import ChatCompletion
+            resp = ChatCompletion.create(
                 model="gpt-4o-mini",
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -41,6 +43,7 @@ class SafeLLMAgent:
             return {"answer": answer, "sources": []}
         except Exception as e:
             return {"answer": f"⚠️ Error calling LLM: {e}", "sources": []}
+
 
 # ---------------- MCP Agents ----------------
 class LLMResponseAgent:

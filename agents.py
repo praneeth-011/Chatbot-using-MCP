@@ -115,66 +115,62 @@ class RetrievalAgent:
             finally:
                 self.inbox.task_done()
 
+from openai import OpenAI  # make sure openai>=2.0 is installed
+
 class LLMResponseAgent:
     def __init__(self, inbox: asyncio.Queue, outbox: asyncio.Queue):
         self.inbox = inbox
         self.outbox = outbox
+        if OPENAI_API_KEY:
+            self.client = OpenAI(api_key=OPENAI_API_KEY)
+        else:
+            self.client = None  # fallback for offline mode
 
-    def _build_prompt(self, query: str, top_chunks: List[Dict]):
+    def _build_prompt(self, query: str, top_chunks: list[dict]):
         # Compose prompt with context
         context_texts = []
         for i, c in enumerate(top_chunks):
             context_texts.append(f"Source {i+1} ({c['source']}):\n{c['text']}\n")
         context = "\n\n".join(context_texts)
         prompt = f"""
-You are a helpful assistant. Use only the information in the provided sources to answer the user query. If the answer is not present, say 'I don't know from the documents provided.'.
+You are a helpful assistant. Use only the information in the provided sources to answer the user query. If the answer is not present, say 'I don't know from the documents provided.'
 
-CONTEXT:
+Context:
 {context}
 
-USER QUERY:
-{query}
-
-Provide: 1) A concise answer, 2) A short list of sources used (file name + chunk id or index).
+User query: {query}
 """
         return prompt
 
-    async def call_openai(self, prompt: str):
-        # uses OpenAI ChatCompletion API
-        if OPENAI_API_KEY is None:
-            # fallback: simple echo
-            return {"answer": "OPENAI_API_KEY not set. Can't call LLM.", "llm_raw": None}
-        resp = openai.ChatCompletion.create(
-            model="gpt-4o-mini" if "gpt-4o-mini" in openai.Model.list().__str__() else "gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=512,
-            temperature=0.0
-        )
-        txt = resp['choices'][0]['message']['content']
-        return {"answer": txt, "llm_raw": resp}
-
     async def run(self):
         while True:
-            msg = await self.inbox.get()
-            try:
-                if msg['type'] == 'RETRIEVAL_RESULT':
-                    trace_id = msg['trace_id']
-                    query = msg['payload']['query']
-                    top_chunks = msg['payload']['retrieved_context']
-                    prompt = self._build_prompt(query, top_chunks)
-                    llm_res = await self.call_openai(prompt)
-                    resp = make_message(
-                        sender='LLMResponseAgent',
-                        receiver='UI',
-                        type_='FINAL_ANSWER',
-                        payload={'answer': llm_res['answer'], 'sources': top_chunks},
-                        trace_id=trace_id
+            item = await self.inbox.get()
+            query = item['query']
+            top_chunks = item.get('top_chunks', [])
+
+            prompt = self._build_prompt(query, top_chunks)
+
+            if self.client:
+                try:
+                    resp = await self.client.chat.completions.acreate(
+                        model="gpt-4o-mini",
+                        messages=[{"role": "user", "content": prompt}]
                     )
-                    await self.outbox.put(resp)
-            except Exception as e:
-                print("LLMResponse error:", e)
-            finally:
-                self.inbox.task_done()
+                    answer = resp.choices[0].message.content
+                except Exception as e:
+                    answer = f"⚠️ Error calling LLM: {e}"
+            else:
+                answer = "⚠️ LLM not available. Set OPENAI_API_KEY."
+
+            await self.outbox.put({
+                "type": "FINAL_ANSWER",
+                "payload": {
+                    "answer": answer,
+                    "sources": top_chunks
+                }
+            })
+            self.inbox.task_done()
+
 
 class CoordinatorAgent:
     """

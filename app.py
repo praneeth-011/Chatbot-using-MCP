@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import asyncio
 import threading
@@ -5,24 +6,25 @@ import uuid
 from pathlib import Path
 from dotenv import load_dotenv
 import os
+from agents import IngestionAgent, RetrievalAgent, LLMResponseAgent, CoordinatorAgent
+from vector_store import VectorStore
 
-# Load .env
+# ---------------- Load OpenAI API Key ----------------
 load_dotenv()
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
-
 if not OPENAI_API_KEY:
     st.warning("⚠️ OPENAI_API_KEY not set. LLM queries will not work.")
-
-from agents import IngestionAgent, RetrievalAgent, LLMResponseAgent, CoordinatorAgent
 
 # ---------------- Queues ----------------
 ingest_in, retrieval_in, llm_in, ui_out = asyncio.Queue(), asyncio.Queue(), asyncio.Queue(), asyncio.Queue()
 
-store = {}  # Replace with your actual VectorStore if needed
+# ---------------- Vector Store ----------------
+store = VectorStore()
 
+# ---------------- Agents ----------------
 ingestion_agent = IngestionAgent(ingest_in, retrieval_in, store)
 retrieval_agent = RetrievalAgent(retrieval_in, llm_in, store)
-llm_agent = LLMResponseAgent(llm_in, ui_out)
+llm_agent = LLMResponseAgent(llm_in, ui_out, api_key=OPENAI_API_KEY)
 coordinator = CoordinatorAgent(ingest_in, retrieval_in, llm_in, ui_out)
 
 # ---------------- Async event loop ----------------
@@ -49,7 +51,7 @@ def run_async(coro):
 st.set_page_config(page_title="Agentic RAG Chatbot", layout="wide")
 st.title("🧠 Agentic RAG Chatbot — MCP Demo")
 
-# Upload documents
+# ----- Upload Documents -----
 st.sidebar.header("1️⃣ Upload Documents")
 uploaded = st.sidebar.file_uploader("Upload files", accept_multiple_files=True)
 
@@ -67,7 +69,7 @@ if st.sidebar.button("Ingest Files"):
         run_async(coordinator.ingest_files(paths))
         st.sidebar.success("Files queued for ingestion.")
 
-# Ask a question
+# ----- Ask a Question -----
 st.sidebar.header("2️⃣ Ask a Question")
 query = st.sidebar.text_input("Enter your question")
 
@@ -78,29 +80,52 @@ if st.sidebar.button("Ask"):
     else:
         st.sidebar.warning("Enter a question first.")
 
-# Display responses
-import time
-msgs = []
-start_time = time.time()
-timeout = 5  # seconds
+# ----- Display responses dynamically -----
+st.header("💬 Chatbot Responses")
+placeholder = st.empty()
 
-while time.time() - start_time < timeout:
+async def fetch_responses():
+    msgs = []
     try:
-        fut = asyncio.run_coroutine_threadsafe(ui_out.get(), loop)
-        msg = fut.result(timeout=0.5)
-        msgs.append(msg)
-        ui_out.task_done()
-    except Exception:
-        time.sleep(0.1)
+        while True:
+            msg = await ui_out.get()
+            msgs.append(msg)
+            ui_out.task_done()
+            yield msg
+    except asyncio.CancelledError:
+        return
 
-for m in msgs:
-    if m['type'] == 'FINAL_ANSWER':
-        st.subheader("Answer")
-        st.write(m['payload']['answer'])
-    elif m['type'] == 'ERROR':
-        st.error(m['payload']['error'])
-    else:
-        st.write(f"⚙️ Intermediate message: {m}")
+# Non-blocking Streamlit display
+response_container = st.container()
+
+def display_messages(msgs):
+    for m in msgs:
+        if m['type'] == 'FINAL_ANSWER':
+            response_container.subheader("Answer")
+            response_container.write(m['payload']['answer'])
+            response_container.subheader("Sources")
+            for s in m['payload']['sources'][:3]:
+                response_container.markdown(f"- {s.get('source','unknown')} (score={s.get('score',0):.3f})")
+        elif m['type'] == 'ERROR':
+            response_container.error(m['payload']['error'])
+        else:
+            response_container.write(f"⚙️ Intermediate: {m.get('payload', {}).get('answer','')}")
+
+# Poll ui_out queue every 0.5 seconds
+def poll_ui():
+    msgs = []
+    while True:
+        try:
+            fut = asyncio.run_coroutine_threadsafe(ui_out.get(), loop)
+            msg = fut.result(timeout=0.2)
+            ui_out.task_done()
+            msgs.append(msg)
+        except Exception:
+            break
+    display_messages(msgs)
+
+st.button("Refresh Responses", on_click=poll_ui)
+
 
         st.write(m['payload']['answer'])
         st.subheader("Sources")

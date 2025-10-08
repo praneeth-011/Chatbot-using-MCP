@@ -1,0 +1,11 @@
+Agentic-RAG-Chatbot-for-Multi-Format-Document-QA-Using-MCP/
+│
+├── app.py
+├── agents/
+│   ├── ingestion_agent.py
+│   ├── retrieval_agent.py
+│   ├── llm_response_agent.py   ← 🟢 PUT THE UPDATED CODE HERE
+│   └── __init__.py
+├── utils/
+├── vector_store/
+└── mcp

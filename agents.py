@@ -189,4 +189,4 @@ class CoordinatorAgent:
 
     async def handle_query(self, query: str):
         msg = make_message(sender='UI', receiver='RetrievalAgent', type_='RETRIEVE', payload={'query': query})
-        await self.retrieval_in.put(msg)
+        await self.llm_in.put({"query": query, "top_chunks": top_chunks})

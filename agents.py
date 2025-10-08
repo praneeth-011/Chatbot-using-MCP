@@ -10,7 +10,7 @@ import json
 import openai
 
 # Ensure OPENAI_API_KEY is set in environment
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_API_KEY = os.environ.get("sk-proj-Edm1FLOnxfPgpb5eb2y6bpR4RE4iSwM_ShUj_hIiTpytM2M3vQGd3dqKARd926FmazO-OSeWLQT3BlbkFJ8XuhRXPszJkydQ1i5WcbJI-UyXzXMfFGXx5rxhqtCbbGrPmRorZqxBgn1JP3fi4_jc2PsIVxsAY")
 openai.api_key = OPENAI_API_KEY
 
 # MCP message structure for typing:

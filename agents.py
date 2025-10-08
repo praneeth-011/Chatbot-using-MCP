@@ -1,51 +1,15 @@
-import os
+# agent.py
 import asyncio
 from typing import List, Dict
 from openai import OpenAI
-from dotenv import load_dotenv
+import os
 
-# Detect Streamlit environment
-try:
-    import streamlit as st
-    STREAMLIT = True
-except ImportError:
-    STREAMLIT = False
-
-load_dotenv()
-
-# Dual-source API key
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") if STREAMLIT else os.getenv("OPENAI_API_KEY")
-
-if not OPENAI_API_KEY:
-    print("⚠️ OPENAI_API_KEY not set. LLM queries will not work.")
-
-# ---------------- Safe LLM wrapper ----------------
-try:
-    from openai import OpenAI
-except ImportError:
-    OpenAI = None
-
-class SafeLLMAgent:
-    def __init__(self):
-        self.client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-
-    async def get_response(self, prompt: str):
-        if not self.client:
-            return {"answer": "⚠️ LLM not available. Set OPENAI_API_KEY.", "sources": []}
-        try:
-            # synchronous call inside async
-            from openai import ChatCompletion
-            resp = ChatCompletion.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}]
-            )
-            answer = resp.choices[0].message.content
-            return {"answer": answer, "sources": []}
-        except Exception as e:
-            return {"answer": f"⚠️ Error calling LLM: {e}", "sources": []}
+# Load API key from environment
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 
-# ---------------- MCP Agents ----------------
+# ---------------- LLM Agent ----------------
 class LLMResponseAgent:
     def __init__(self, inbox: asyncio.Queue, outbox: asyncio.Queue):
         self.inbox = inbox
@@ -58,8 +22,8 @@ class LLMResponseAgent:
         context = "\n\n".join(context_texts)
 
         return f"""
-You are a helpful AI assistant. Use only the given sources to answer the question.
-If the answer is not in the sources, say "I don't know from the provided documents."
+You are a helpful assistant. Answer the user question using only the information provided in the sources.
+If the answer is not present, say "I don't know from the provided documents."
 
 Context:
 {context}
@@ -79,30 +43,28 @@ Answer:
                     top_chunks = task["payload"]["top_chunks"]
                     prompt = self._build_prompt(query, top_chunks)
 
-                    # ✅ Use new OpenAI SDK call
-                    response = client.chat.completions.create(
-                        model="gpt-4o-mini",  # change model if needed
-                        messages=[{"role": "user", "content": prompt}],
-                    )
-
-                    answer = response.choices[0].message.content.strip()
+                    if not client:
+                        answer = "⚠️ LLM not available. Set OPENAI_API_KEY."
+                    else:
+                        # OpenAI API call
+                        resp = client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[{"role": "user", "content": prompt}],
+                        )
+                        answer = resp.choices[0].message.content.strip()
 
                     await self.outbox.put({
                         "type": "FINAL_ANSWER",
-                        "payload": {
-                            "answer": answer,
-                            "sources": top_chunks,
-                        }
+                        "payload": {"answer": answer, "sources": top_chunks}
                     })
+
             except Exception as e:
-                await self.outbox.put({
-                    "type": "ERROR",
-                    "payload": {"error": str(e)},
-                })
+                await self.outbox.put({"type": "ERROR", "payload": {"error": str(e)}})
             finally:
                 self.inbox.task_done()
 
-# ---------------- Dummy Agents for testing ----------------
+
+# ---------------- Dummy Ingestion & Retrieval Agents ----------------
 class IngestionAgent:
     def __init__(self, inbox, retrieval_in, store):
         self.inbox = inbox
@@ -111,7 +73,12 @@ class IngestionAgent:
 
     async def run(self):
         while True:
+            task = await self.inbox.get()
+            # Here, you would parse and add files to vector store
+            # For demo, just simulate ingestion
             await asyncio.sleep(1)
+            self.inbox.task_done()
+
 
 class RetrievalAgent:
     def __init__(self, inbox, llm_in, store):
@@ -121,7 +88,15 @@ class RetrievalAgent:
 
     async def run(self):
         while True:
-            await asyncio.sleep(1)
+            task = await self.inbox.get()
+            if task["type"] == "QUERY":
+                query = task["payload"]["query"]
+                # For demo: fetch top chunks from store (dummy)
+                top_chunks = [{"source": "DemoDoc.txt", "text": "This is a demo chunk."}]
+                await self.llm_in.put({"type": "LLM_QUERY", "payload": {"query": query, "top_chunks": top_chunks}})
+            await asyncio.sleep(0.1)
+            self.inbox.task_done()
+
 
 class CoordinatorAgent:
     def __init__(self, ingest_in, retrieval_in, llm_in, ui_out):
@@ -131,11 +106,7 @@ class CoordinatorAgent:
         self.ui_out = ui_out
 
     async def ingest_files(self, paths):
-        """Send file ingestion tasks to the IngestionAgent."""
         await self.ingest_in.put({"type": "INGEST_FILES", "payload": {"paths": paths}})
 
     async def handle_query(self, query):
-        """Send a query to the RetrievalAgent."""
         await self.retrieval_in.put({"type": "QUERY", "payload": {"query": query}})
-
-

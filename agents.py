@@ -73,7 +73,6 @@ Answer:
     async def run(self):
         while True:
             task = await self.inbox.get()
-            print("🧩 LLM Agent received task:", task)
             try:
                 if task["type"] == "LLM_QUERY":
                     query = task["payload"]["query"]

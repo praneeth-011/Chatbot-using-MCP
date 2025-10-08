@@ -130,10 +130,12 @@ class CoordinatorAgent:
         self.llm_in = llm_in
         self.ui_out = ui_out
 
-    async def handle_query(self, query: str):
-        # retrieve top chunks
-        await self.retrieval_in.put({
-            "type": "RETRIEVE",
-            "payload": {"query": query}
-        })
+    async def ingest_files(self, paths):
+        """Send file ingestion tasks to the IngestionAgent."""
+        await self.ingest_in.put({"type": "INGEST_FILES", "payload": {"paths": paths}})
+
+    async def handle_query(self, query):
+        """Send a query to the RetrievalAgent."""
+        await self.retrieval_in.put({"type": "QUERY", "payload": {"query": query}})
+
 

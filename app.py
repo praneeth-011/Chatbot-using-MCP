@@ -97,6 +97,12 @@ for m in msgs:
     if m['type'] == 'FINAL_ANSWER':
         st.subheader("Answer")
         st.write(m['payload']['answer'])
+    elif m['type'] == 'ERROR':
+        st.error(m['payload']['error'])
+    else:
+        st.write(f"⚙️ Intermediate message: {m}")
+
+        st.write(m['payload']['answer'])
         st.subheader("Sources")
         for s in m['payload']['sources'][:3]:
             st.markdown(f"- {s.get('source','unknown')} (score={s.get('score',0):.3f})")

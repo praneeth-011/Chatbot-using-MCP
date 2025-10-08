@@ -10,7 +10,6 @@ try:
 except ImportError:
     STREAMLIT = False
 
-# Load local .env
 load_dotenv()
 
 # Dual-source API key
@@ -50,36 +49,70 @@ class LLMResponseAgent:
     def __init__(self, inbox: asyncio.Queue, outbox: asyncio.Queue):
         self.inbox = inbox
         self.outbox = outbox
-        self.safe_llm = SafeLLMAgent()
 
     def _build_prompt(self, query: str, top_chunks: List[Dict]):
-        context_texts = [f"Source {i+1} ({c['source']}):\n{c['text']}\n" for i, c in enumerate(top_chunks)]
+        """
+        Combine context chunks and user query into a structured prompt.
+        """
+        context_texts = []
+        for i, c in enumerate(top_chunks):
+            context_texts.append(f"Source {i+1} ({c.get('source', 'unknown')}):\n{c.get('text', '')}\n")
         context = "\n\n".join(context_texts)
+        
         prompt = f"""
-You are a helpful assistant. Use only the information in the provided sources to answer the user query.
+You are a helpful assistant. Use only the information in the provided sources to answer the user query. 
 If the answer is not present, say 'I don't know from the documents provided.'
 
 Context:
 {context}
 
-User query: {query}
+Question: {query}
+Answer:
 """
         return prompt
 
     async def run(self):
+        """
+        Continuously listen for incoming messages and respond using OpenAI LLM.
+        """
         while True:
-            item = await self.inbox.get()
-            query = item['query']
-            top_chunks = item.get('top_chunks', [])
+            msg = await self.inbox.get()
+            try:
+                if msg["type"] == "QUERY":
+                    query = msg["payload"]["query"]
+                    top_chunks = msg["payload"].get("top_chunks", [])
+                    prompt = self._build_prompt(query, top_chunks)
 
-            print("[LLM] Received query:", query)
+                    # Call OpenAI LLM asynchronously
+                    response = await client.chat.completions.acreate(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": "You are a document-based Q&A assistant."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.3,
+                    )
 
-            prompt = self._build_prompt(query, top_chunks)
-            response = await self.safe_llm.get_response(prompt)
+                    answer = response.choices[0].message.content.strip()
 
-            await self.outbox.put({"type": "FINAL_ANSWER", "payload": response})
-            self.inbox.task_done()
-            print("[LLM] Response sent to UI")
+                    await self.outbox.put({
+                        "type": "FINAL_ANSWER",
+                        "payload": {
+                            "answer": answer,
+                            "sources": top_chunks[:3]
+                        }
+                    })
+
+            except Exception as e:
+                await self.outbox.put({
+                    "type": "FINAL_ANSWER",
+                    "payload": {
+                        "answer": f"⚠️ Error calling LLM: {str(e)}",
+                        "sources": []
+                    }
+                })
+            finally:
+                self.inbox.task_done()
 
 # ---------------- Dummy Agents for testing ----------------
 class IngestionAgent:

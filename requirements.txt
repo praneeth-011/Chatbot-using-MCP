@@ -1,0 +1,14 @@
+streamlit==1.26.2
+fastapi==0.95.2
+uvicorn==0.22.0
+python-multipart==0.0.6
+rich==13.4.0
+faiss-cpu==1.7.4
+sentence-transformers==2.2.2
+openai==1.32.0
+pandas==2.2.2
+python-docx==0.8.11
+PyPDF2==3.0.1
+python-pptx==0.6.21
+tqdm==4.66.1
+aiofiles==23.1.0

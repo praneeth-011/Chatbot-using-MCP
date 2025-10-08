@@ -1,32 +1,35 @@
 # app.py
-import streamlit as st
+import os
 import asyncio
 import threading
 import uuid
 from pathlib import Path
 from dotenv import load_dotenv
-import os
 
-# Load environment variables
+import streamlit as st
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# ---------------- OpenAI ----------------
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     st.warning("⚠️ OPENAI_API_KEY not set. LLM queries will not work.")
 
+from openai import OpenAI
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
 from agent import IngestionAgent, RetrievalAgent, LLMResponseAgent, CoordinatorAgent
+from vector_store import VectorStore
 
 # ---------------- Queues ----------------
 ingest_in, retrieval_in, llm_in, ui_out = asyncio.Queue(), asyncio.Queue(), asyncio.Queue(), asyncio.Queue()
-
-store = {}  # Replace with your VectorStore if available
+store = VectorStore()
 
 ingestion_agent = IngestionAgent(ingest_in, retrieval_in, store)
 retrieval_agent = RetrievalAgent(retrieval_in, llm_in, store)
-llm_agent = LLMResponseAgent(llm_in, ui_out)
+llm_agent = LLMResponseAgent(llm_in, ui_out, client)
 coordinator = CoordinatorAgent(ingest_in, retrieval_in, llm_in, ui_out)
 
-# ---------------- Async event loop ----------------
+# ---------------- Async Event Loop ----------------
 def start_event_loop(loop):
     asyncio.set_event_loop(loop)
     loop.run_forever()
@@ -50,10 +53,9 @@ def run_async(coro):
 st.set_page_config(page_title="Agentic RAG Chatbot", layout="wide")
 st.title("🧠 Agentic RAG Chatbot — MCP Demo")
 
-# Upload documents
+# Upload Documents
 st.sidebar.header("1️⃣ Upload Documents")
 uploaded = st.sidebar.file_uploader("Upload files", accept_multiple_files=True)
-
 if st.sidebar.button("Ingest Files"):
     if not uploaded:
         st.sidebar.warning("Upload at least one file.")
@@ -68,10 +70,9 @@ if st.sidebar.button("Ingest Files"):
         run_async(coordinator.ingest_files(paths))
         st.sidebar.success("Files queued for ingestion.")
 
-# Ask a question
+# Ask a Question
 st.sidebar.header("2️⃣ Ask a Question")
 query = st.sidebar.text_input("Enter your question")
-
 if st.sidebar.button("Ask"):
     if query.strip():
         run_async(coordinator.handle_query(query))
@@ -84,7 +85,6 @@ import time
 msgs = []
 start_time = time.time()
 timeout = 5  # seconds
-
 while time.time() - start_time < timeout:
     try:
         fut = asyncio.run_coroutine_threadsafe(ui_out.get(), loop)

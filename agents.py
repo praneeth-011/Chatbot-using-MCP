@@ -8,10 +8,21 @@ from vector_store import VectorStore
 import os
 import json
 import openai
+
+try:
+    import streamlit as st
+    STREAMLIT = True
+except ImportError:
+    STREAMLIT = False
+
 from dotenv import load_dotenv
-import os
 
 load_dotenv()
+OPENAI_API_KEY = None
+if STREAMLIT:
+    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_KEY = os.getenv("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")
 
 if not OPENAI_API_KEY:

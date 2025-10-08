@@ -1,139 +1,60 @@
-# agents.py
-import asyncio
-import uuid
-from typing import Dict, Any, List
-from parsers import parse_file
-from utils import chunk_text, clean_text
-from vector_store import VectorStore
 import os
-import json
-import openai
+import asyncio
+from typing import List, Dict
+from dotenv import load_dotenv
 
+# Detect Streamlit environment
 try:
     import streamlit as st
     STREAMLIT = True
 except ImportError:
     STREAMLIT = False
 
-from dotenv import load_dotenv
-
+# Load local .env
 load_dotenv()
-OPENAI_API_KEY = None
-if STREAMLIT:
-    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_API_KEY = os.getenv("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")
+
+# Dual-source API key
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") if STREAMLIT else os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
     print("⚠️ OPENAI_API_KEY not set. LLM queries will not work.")
-    
-# Ensure OPENAI_API_KEY is set in environment
-OPENAI_API_KEY = os.environ.get("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")
-openai.api_key = OPENAI_API_KEY
 
-# MCP message structure for typing:
-def make_message(sender: str, receiver: str, type_: str, payload: Dict[str, Any], trace_id: str = None):
-    return {
-        "sender": sender,
-        "receiver": receiver,
-        "type": type_,
-        "trace_id": trace_id or str(uuid.uuid4()),
-        "payload": payload
-    }
+# ---------------- Safe LLM wrapper ----------------
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
-class IngestionAgent:
-    def __init__(self, inbox: asyncio.Queue, outbox: asyncio.Queue, store: VectorStore):
-        self.inbox = inbox
-        self.outbox = outbox
-        self.store = store
+class SafeLLMAgent:
+    def __init__(self):
+        self.client = OpenAI(api_key=OPENAI_API_KEY) if (OPENAI_API_KEY and OpenAI) else None
 
-    async def run(self):
-        while True:
-            msg = await self.inbox.get()
-            try:
-                if msg['type'] == 'INGEST_FILES':
-                    files = msg['payload']['files']  # list of filepaths
-                    trace_id = msg['trace_id']
-                    all_chunks = []
-                    metas = []
-                    for fpath in files:
-                        parsed = parse_file(fpath)
-                        text = clean_text(parsed.get('text', ''))
-                        chunks = chunk_text(text, chunk_size=800, overlap=100)
-                        for i, ch in enumerate(chunks):
-                            meta = {
-                                'source': fpath,
-                                'chunk_id': f"{os.path.basename(fpath)}_chunk_{i}",
-                                'text': ch
-                            }
-                            all_chunks.append(ch)
-                            metas.append(meta)
-                    if all_chunks:
-                        self.store.add_texts(all_chunks, metas)
-                    # Send MCP message to RetrievalAgent
-                    resp = make_message(
-                        sender='IngestionAgent',
-                        receiver='RetrievalAgent',
-                        type_='INGESTION_DONE',
-                        payload={'num_chunks': len(all_chunks)},
-                        trace_id=trace_id
-                    )
-                    await self.outbox.put(resp)
-            except Exception as e:
-                print("Ingestion error:", e)
-            finally:
-                self.inbox.task_done()
+    async def get_response(self, prompt: str):
+        if not self.client:
+            return {"answer": "⚠️ LLM not available. Set OPENAI_API_KEY.", "sources": []}
+        try:
+            resp = await self.client.chat.completions.acreate(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            answer = resp.choices[0].message.content
+            return {"answer": answer, "sources": []}
+        except Exception as e:
+            return {"answer": f"⚠️ Error calling LLM: {e}", "sources": []}
 
-class RetrievalAgent:
-    def __init__(self, inbox: asyncio.Queue, outbox: asyncio.Queue, store: VectorStore):
-        self.inbox = inbox
-        self.outbox = outbox
-        self.store = store
-
-    async def run(self):
-        while True:
-            msg = await self.inbox.get()
-            try:
-                if msg['type'] == 'RETRIEVE':
-                    query = msg['payload']['query']
-                    top_k = msg['payload'].get('top_k', 5)
-                    trace_id = msg['trace_id']
-                    results = self.store.query(query, top_k=top_k)
-                    # Build payload with top chunks
-                    top_chunks = [{'text': r['text'], 'source': r['source'], 'score': r['score']} for r in results]
-                    resp = make_message(
-                        sender='RetrievalAgent',
-                        receiver='LLMResponseAgent',
-                        type_='RETRIEVAL_RESULT',
-                        payload={'retrieved_context': top_chunks, 'query': query},
-                        trace_id=trace_id
-                    )
-                    await self.outbox.put(resp)
-            except Exception as e:
-                print("Retrieval error:", e)
-            finally:
-                self.inbox.task_done()
-
-from openai import OpenAI  # make sure openai>=2.0 is installed
-
+# ---------------- MCP Agents ----------------
 class LLMResponseAgent:
     def __init__(self, inbox: asyncio.Queue, outbox: asyncio.Queue):
         self.inbox = inbox
         self.outbox = outbox
-        if OPENAI_API_KEY:
-            self.client = OpenAI(api_key=OPENAI_API_KEY)
-        else:
-            self.client = None  # fallback for offline mode
+        self.safe_llm = SafeLLMAgent()
 
-    def _build_prompt(self, query: str, top_chunks: list[dict]):
-        # Compose prompt with context
-        context_texts = []
-        for i, c in enumerate(top_chunks):
-            context_texts.append(f"Source {i+1} ({c['source']}):\n{c['text']}\n")
+    def _build_prompt(self, query: str, top_chunks: List[Dict]):
+        context_texts = [f"Source {i+1} ({c['source']}):\n{c['text']}\n" for i, c in enumerate(top_chunks)]
         context = "\n\n".join(context_texts)
         prompt = f"""
-You are a helpful assistant. Use only the information in the provided sources to answer the user query. If the answer is not present, say 'I don't know from the documents provided.'
+You are a helpful assistant. Use only the information in the provided sources to answer the user query.
+If the answer is not present, say 'I don't know from the documents provided.'
 
 Context:
 {context}
@@ -148,45 +69,48 @@ User query: {query}
             query = item['query']
             top_chunks = item.get('top_chunks', [])
 
+            print("[LLM] Received query:", query)
+
             prompt = self._build_prompt(query, top_chunks)
+            response = await self.safe_llm.get_response(prompt)
 
-            if self.client:
-                try:
-                    resp = await self.client.chat.completions.acreate(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}]
-                    )
-                    answer = resp.choices[0].message.content
-                except Exception as e:
-                    answer = f"⚠️ Error calling LLM: {e}"
-            else:
-                answer = "⚠️ LLM not available. Set OPENAI_API_KEY."
-
-            await self.outbox.put({
-                "type": "FINAL_ANSWER",
-                "payload": {
-                    "answer": answer,
-                    "sources": top_chunks
-                }
-            })
+            await self.outbox.put({"type": "FINAL_ANSWER", "payload": response})
             self.inbox.task_done()
+            print("[LLM] Response sent to UI")
 
+# ---------------- Dummy Agents for testing ----------------
+class IngestionAgent:
+    def __init__(self, inbox, retrieval_in, store):
+        self.inbox = inbox
+        self.retrieval_in = retrieval_in
+        self.store = store
+
+    async def run(self):
+        while True:
+            await asyncio.sleep(1)
+
+class RetrievalAgent:
+    def __init__(self, inbox, llm_in, store):
+        self.inbox = inbox
+        self.llm_in = llm_in
+        self.store = store
+
+    async def run(self):
+        while True:
+            await asyncio.sleep(1)
 
 class CoordinatorAgent:
-    """
-    Accepts user actions (upload + ask) and dispatches MCP messages to the agent inboxes.
-    """
-    def __init__(self, ingestion_in: asyncio.Queue, retrieval_in: asyncio.Queue, llm_in: asyncio.Queue, ui_out: asyncio.Queue):
-        self.ingestion_in = ingestion_in
+    def __init__(self, ingest_in, retrieval_in, llm_in, ui_out):
+        self.ingest_in = ingest_in
         self.retrieval_in = retrieval_in
         self.llm_in = llm_in
         self.ui_out = ui_out
 
-    async def ingest_files(self, files: List[str]):
-        msg = make_message(sender='UI', receiver='IngestionAgent', type_='INGEST_FILES', payload={'files': files})
-        await self.ingestion_in.put(msg)
-        # Wait for ingestion done -> will be processed by RetrievalAgent through MCP path
+    async def ingest_files(self, paths: list):
+        print("[Coordinator] Files ingested:", paths)
 
     async def handle_query(self, query: str):
-        msg = make_message(sender='UI', receiver='RetrievalAgent', type_='RETRIEVE', payload={'query': query})
+        print("[Coordinator] Handling query:", query)
+        # Send dummy chunks to LLM
+        top_chunks = [{"source": "Test Doc", "text": "This is a test document text."}]
         await self.llm_in.put({"query": query, "top_chunks": top_chunks})

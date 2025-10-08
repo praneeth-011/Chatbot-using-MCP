@@ -1,41 +1,79 @@
-import streamlit as st, asyncio, threading, uuid
+import streamlit as st
+import asyncio
+import threading
+import uuid
+from pathlib import Path
+from dotenv import load_dotenv
+import os
+
+# Load local .env
+load_dotenv()
+
+# Dual-source API key (Streamlit Cloud or local)
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+
+if not OPENAI_API_KEY:
+    st.warning("⚠️ OPENAI_API_KEY not set. LLM queries will not work.")
+
+# ------------------- Import MCP agents -------------------
 from agents import IngestionAgent, RetrievalAgent, LLMResponseAgent, CoordinatorAgent
 from vector_store import VectorStore
-from pathlib import Path
 
-
+# ------------------- Queues -------------------
 ingest_in, retrieval_in, llm_in, ui_out = asyncio.Queue(), asyncio.Queue(), asyncio.Queue(), asyncio.Queue()
 store = VectorStore()
+
 ingestion_agent = IngestionAgent(ingest_in, retrieval_in, store)
 retrieval_agent = RetrievalAgent(retrieval_in, llm_in, store)
 llm_agent = LLMResponseAgent(llm_in, ui_out)
 coordinator = CoordinatorAgent(ingest_in, retrieval_in, llm_in, ui_out)
 
-def start_event_loop(loop): asyncio.set_event_loop(loop); loop.run_forever()
+# ------------------- Async event loop -------------------
+def start_event_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
 loop = asyncio.new_event_loop()
 threading.Thread(target=start_event_loop, args=(loop,), daemon=True).start()
-async def schedule_agents(): await asyncio.gather(ingestion_agent.run(), retrieval_agent.run(), llm_agent.run())
+
+async def schedule_agents():
+    await asyncio.gather(
+        ingestion_agent.run(),
+        retrieval_agent.run(),
+        llm_agent.run()
+    )
+
 asyncio.run_coroutine_threadsafe(schedule_agents(), loop)
-def run_async(coro): return asyncio.run_coroutine_threadsafe(coro, loop)
 
-st.set_page_config(page_title="Agentic RAG Chatbot (No-LLM)", layout="wide")
-st.title("🧠 Agentic RAG Chatbot — MCP Demo (Offline Mode)")
+def run_async(coro):
+    return asyncio.run_coroutine_threadsafe(coro, loop)
 
+# ------------------- Streamlit UI -------------------
+st.set_page_config(page_title="Agentic RAG Chatbot (MCP)", layout="wide")
+st.title("🧠 Agentic RAG Chatbot — MCP Demo")
+
+# Sidebar: Upload documents
 st.sidebar.header("1️⃣ Upload Documents")
 uploaded = st.sidebar.file_uploader("Upload files", accept_multiple_files=True)
+
 if st.sidebar.button("Ingest Files"):
-    if not uploaded: st.sidebar.warning("Upload at least one file.")
+    if not uploaded:
+        st.sidebar.warning("Upload at least one file.")
     else:
         paths = []
+        Path("assets").mkdir(exist_ok=True)
         for f in uploaded:
             p = f"assets/{uuid.uuid4().hex[:6]}_{f.name}"
-            with open(p,'wb') as out: out.write(f.getbuffer())
+            with open(p, "wb") as out:
+                out.write(f.getbuffer())
             paths.append(p)
         run_async(coordinator.ingest_files(paths))
         st.sidebar.success("Files queued for ingestion.")
 
+# Sidebar: Ask a question
 st.sidebar.header("2️⃣ Ask a Question")
 query = st.sidebar.text_input("Enter your question")
+
 if st.sidebar.button("Ask"):
     if query.strip():
         run_async(coordinator.handle_query(query))
@@ -43,8 +81,10 @@ if st.sidebar.button("Ask"):
     else:
         st.sidebar.warning("Enter a question first.")
 
+# Main panel: show chatbot responses
 st.header("💬 Chatbot Responses")
 msgs = []
+
 try:
     while True:
         fut = asyncio.run_coroutine_threadsafe(ui_out.get(), loop)

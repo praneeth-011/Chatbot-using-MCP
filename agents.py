@@ -73,6 +73,7 @@ Answer:
     async def run(self):
         while True:
             task = await self.inbox.get()
+            print("🧩 LLM Agent received task:", task)
             try:
                 if task["type"] == "LLM_QUERY":
                     query = task["payload"]["query"]
@@ -130,11 +131,15 @@ class CoordinatorAgent:
         self.llm_in = llm_in
         self.ui_out = ui_out
 
-    async def ingest_files(self, paths: list):
-        print("[Coordinator] Files ingested:", paths)
-
     async def handle_query(self, query: str):
-        print("[Coordinator] Handling query:", query)
-        # Send dummy chunks to LLM
-        top_chunks = [{"source": "Test Doc", "text": "This is a test document text."}]
-        await self.llm_in.put({"query": query, "top_chunks": top_chunks})
+        # retrieve top chunks
+        await self.retrieval_in.put({
+            "type": "RETRIEVE",
+            "payload": {"query": query}
+        })
+
+    async def handle_retrieved(self, query, top_chunks):
+        await self.llm_in.put({
+            "type": "LLM_QUERY",
+            "payload": {"query": query, "top_chunks": top_chunks}
+        })

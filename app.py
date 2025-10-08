@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 from dotenv import load_dotenv
 import os
+import time
 
 # Load local .env
 load_dotenv()
@@ -101,3 +102,16 @@ for m in msgs:
         st.subheader("Sources")
         for s in m['payload']['sources'][:3]:
             st.markdown(f"- {s.get('source','unknown')} (score={s.get('score',0):.3f})")
+            
+msgs = []
+start_time = time.time()
+timeout = 5  # seconds to wait for LLM response
+
+while time.time() - start_time < timeout:
+    try:
+        fut = asyncio.run_coroutine_threadsafe(ui_out.get(), loop)
+        msg = fut.result(timeout=0.5)
+        msgs.append(msg)
+        ui_out.task_done()
+    except Exception:
+        time.sleep(0.1)
